@@ -64,11 +64,13 @@ from common.FileSystemConfig import config_filesystem
 from common.Caches import *
 from common.cpu2000 import *
 
+# from XBar import L3XBar
+
 class L1Cache_henry(Cache):
     assoc = 2
-    tag_latency = 2
-    data_latency = 2
-    response_latency = 2
+    tag_latency = 1
+    data_latency = 1 
+    response_latency = 1
     mshrs = 4
     tgts_per_mshr = 20
     def __init__(self):
@@ -83,7 +85,7 @@ class L1Cache_henry(Cache):
         raise NotImplementedError
 
 class L1DCache_henry(L1Cache_henry):
-    size='16kB'
+    size='32kB'      
     def __init__(self,l1i_size):
         super(L1DCache_henry,self).__init__()
         self.size=l1i_size
@@ -91,7 +93,7 @@ class L1DCache_henry(L1Cache_henry):
         self.cpu_side=cpu.icache_port
 
 class L1ICache_henry(L1Cache_henry):
-    size='64kB'
+    size='16kB'
     def __init__(self,l1d_size):
         super(L1ICache_henry,self).__init__()
         self.size=l1d_size
@@ -106,14 +108,41 @@ class L2Cache_henry(Cache):
     response_latency = 20
     mshrs = 20
     tgts_per_mshr = 12
-    def __init__(self, l2_size):
+    def __init__(self, l2_size,tag_latency=1,data_latency=1):
         super(L2Cache_henry, self).__init__()
         self.size = l2_size
+        self.tag_latency=tag_latency
+        self.data_latency=data_latency
+        self.response_latency=data_latency
     def connectCPUSideBus(self, bus):
         self.cpu_side = bus.mem_side_ports
     def connectMemSideBus(self, bus):
         self.mem_side = bus.cpu_side_ports
 
+class L3Cache_henry(Cache):
+    size = '1024kB'
+    assoc = 64
+    tag_latency = 200
+    data_latency = 200
+    response_latency = 200
+    mshrs = 32
+    tgts_per_mshr = 24
+    def __init__(self, l3_size):
+        super(L3Cache_henry, self).__init__()
+        self.size = l3_size
+    def connectCPUSideBus(self, bus):
+        self.cpu_side = bus.mem_side_ports
+    def connectMemSideBus(self, bus):
+        self.mem_side = bus.cpu_side_ports
+
+class L3XBar(CoherentXBar):
+# 256-bit crossbar by default
+    width = 32
+    frontend_latency = 1
+    forward_latency = 0
+    response_latency = 1
+    snoop_response_latency = 1
+    snoop_filter = SnoopFilter(lookup_latency = 0)
 
 def get_process(args):
     """Interprets provided args and returns a list of processes"""
@@ -122,20 +151,23 @@ def get_process(args):
 
     workload=args.workload
     process = Process(pid = 100)
-    process.executable = workload
+    process.executable = workload.split()[0]
     process.cwd = os.getcwd()
     process.gid = os.getgid()
-    process.cmd = [workload] + args.option.split()
+    process.cmd = workload.split()
 
     return process
 
 parser=argparse.ArgumentParser(description='simple cpu')
 parser.add_argument('--workload',type=str,default='')
-parser.add_argument('--option',type=str)
+# parser.add_argument('--option',type=str)
+parser.add_argument('--cpu-type',type=str,default='O3')
 parser.add_argument('--num-cpus',type=int,default=1)
-parser.add_argument('--l1i_size',type=str,default='16kB')
-parser.add_argument('--l1d_size',type=str,default='64kB')
-parser.add_argument('--l2_size',type=str,default='512kB')
+# parser.add_argument('--l1i_size',type=str,default='64kB')
+# parser.add_argument('--l1d_size',type=str,default='64kB')
+parser.add_argument('--l2-size',type=str,default='512kB')
+parser.add_argument('--l2-tag',type=int,default=10)
+parser.add_argument('--l2-data',type=int,default=10)
 
 
 args=parser.parse_args()
@@ -154,14 +186,21 @@ system.mem_mode = 'timing'               # Use timing accesses
 system.mem_ranges = [AddrRange('8GB')] # Create an address range
 
 # Create a pair of simple CPUs
-system.cpu = [TimingSimpleCPU() for i in range(args.num_cpus)]
+if args.cpu_type=='O3':
+    system.cpu = [O3CPU() for i in range(args.num_cpus)]
+else:
+    system.cpu = [TimingSimpleCPU() for i in range(args.num_cpus)]
 
-# for i in range(args.num_cpus):
-#     system.cpu[i].
+
 
 for i in range(args.num_cpus):
-    system.cpu[i].icache=L1ICache_henry(args.l1i_size)
-    system.cpu[i].dcache=L1DCache_henry(args.l1d_size)
+    if args.cpu_type=='O3':
+        system.cpu[i].icache=L1ICache_henry('64kB')
+        system.cpu[i].dcache=L1DCache_henry('64kB')
+    else:
+        system.cpu[i].icache=L1ICache_henry('32kB')
+        system.cpu[i].dcache=L1DCache_henry('32kB')
+    system.cpu[i].clk_domain=system.clk_domain
 
 for i in range(args.num_cpus):
     system.cpu[i].icache.connectCPU(system.cpu[i])
@@ -173,14 +212,19 @@ for i in range(args.num_cpus):
     system.cpu[i].icache.connectBus(system.l2bus[i])
     system.cpu[i].dcache.connectBus(system.l2bus[i])
 
-system.l2cache=[L2Cache_henry(args.l2_size) for i in range(args.num_cpus)]
+system.l2cache=[L2Cache_henry(args.l2_size,args.l2_tag,args.l2_data) for i in range(args.num_cpus)]
 for i in range(args.num_cpus):
     system.l2cache[i].connectCPUSideBus(system.l2bus[i])
 
+# system.l3bus=L3XBar()
 system.membus=SystemXBar()
-
 for i in range(args.num_cpus):
     system.l2cache[i].connectMemSideBus(system.membus)
+
+# system.l3cache=L3Cache_henry('32MB')
+# system.l3cache.connectCPUSideBus(system.l3bus)
+
+# system.l3cache.connectMemSideBus(system.membus)
 
 for cpu in system.cpu:
     cpu.createInterruptController()
@@ -207,6 +251,13 @@ system.workload = SEWorkload.init_compatible(mp0_path)
 
 root = Root(full_system = False, system = system)
 m5.instantiate()
+
+with open('henry/results/sim_result_log_large.csv','a') as f:
+    print("{},{},{},{},{}".format(args.workload.split()[0].split('/')[-1],args.l2_size,args.cpu_type,args.num_cpus,args.workload),file=f)
+
 print("Beginning simulation!")
 exit_event = m5.simulate()
 print('Exiting @ tick %i because %s' % (m5.curTick(), exit_event.getCause()))
+
+with open('henry/results/sim_result_large.csv','a') as f:
+    print("{},{},{},{},{}".format(args.workload.split()[0].split('/')[-1],args.l2_size,args.cpu_type,args.num_cpus,m5.curTick()/3e9),file=f)

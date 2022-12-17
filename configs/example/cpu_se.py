@@ -64,107 +64,75 @@ from common.FileSystemConfig import config_filesystem
 from common.Caches import *
 from common.cpu2000 import *
 
+def L1DCache_henry(L1Cache):
+    size='16kB'
+    def __init__(self,l1i_size):
+        self.size=l1i_size
+    def connectCPU(self,cpu):
+        self.cpu_side=cpu.icache_port
+
+def L1ICache_henry(L1Cache):
+    size='64kB'
+    def __init__(self,l1d_size):
+        self.size=l1d_size
+    def connectCPU(self,cpu):
+        self.cpu_side=cpu.dcache_port
+
+class
+
+
 def get_processes(args):
     """Interprets provided args and returns a list of processes"""
 
     multiprocesses = []
-    inputs = []
-    outputs = []
-    errouts = []
-    pargs = []
 
-    workloads = args.cmd.split(';')
-    if args.input != "":
-        inputs = args.input.split(';')
-    if args.output != "":
-        outputs = args.output.split(';')
-    if args.errout != "":
-        errouts = args.errout.split(';')
-    if args.options != "":
-        pargs = args.options.split(';')
+    workload=args.cmd
+    process = Process(pid = 100 + idx)
+    process.executable = workload
+    process.cwd = os.getcwd()
+    process.gid = os.getgid()
+    process.cmd = [workload] + args.options.split()
+        
+    multiprocesses.append(process)
 
-    idx = 0
-    # print('workloads:',workloads)
-    # exit()
-    for wrkld in workloads:
-        process = Process(pid = 100 + idx)
-        process.executable = wrkld
-        process.cwd = os.getcwd()
-        process.gid = os.getgid()
-
-        if args.env:
-            with open(args.env, 'r') as f:
-                process.env = [line.rstrip() for line in f]
-
-        if len(pargs) > idx:
-            process.cmd = [wrkld] + pargs[idx].split()
-        else:
-            process.cmd = [wrkld]
-
-        if len(inputs) > idx:
-            process.input = inputs[idx]
-        if len(outputs) > idx:
-            process.output = outputs[idx]
-        if len(errouts) > idx:
-            process.errout = errouts[idx]
-
-        multiprocesses.append(process)
-        idx += 1
-
-    # print('multiprocess:',multiprocesses)
-    # exit()
-    if args.smt:
-        assert(args.cpu_type == "DerivO3CPU")
-        return multiprocesses, idx
-    else:
-        return multiprocesses, 1
+    return multiprocesses, 1
 
 
-parser = argparse.ArgumentParser()
-Options.addCommonOptions(parser)
-Options.addSEOptions(parser)
+def main(args):
 
-if '--ruby' in sys.argv:
-    Ruby.define_options(parser)
 
-args = parser.parse_args()
-
-multiprocesses = []
-numThreads = 1
-
-if args.bench:
-    apps = args.bench.split("-")
-    if len(apps) != args.num_cpus:
-        print("number of benchmarks not equal to set num_cpus!")
-        sys.exit(1)
-
-    for app in apps:
-        try:
-            if buildEnv['TARGET_ISA'] == 'arm':
-                exec("workload = %s('arm_%s', 'linux', '%s')" % (
-                        app, args.arm_iset, args.spec_input))
-            else:
-                exec("workload = %s(buildEnv['TARGET_ISA', 'linux', '%s')" % (
-                        app, args.spec_input))
-            multiprocesses.append(workload.makeProcess())
-        except:
-            print("Unable to find workload for %s: %s" %
-                  (buildEnv['TARGET_ISA'], app),
-                  file=sys.stderr)
-            sys.exit(1)
-elif args.cmd:
     multiprocesses, numThreads = get_processes(args)
-else:
-    print("No workload specified. Exiting!\n", file=sys.stderr)
-    sys.exit(1)
+    (CPUClass, test_mem_mode)=Simulation.getCPUClass('TimingSimpleCPU')
+
+    # create the system we are going to simulate
+    system = System()
+
+    # Set the clock frequency of the system (and all of its children)
+    system.clk_domain = SrcClockDomain()
+    system.clk_domain.clock = '3GHz'
+    system.clk_domain.voltage_domain = VoltageDomain()
+
+    # Set up the system
+    system.mem_mode = 'timing'               # Use timing accesses
+    system.mem_ranges = [AddrRange('4GB')] # Create an address range
+
+    # Create a pair of simple CPUs
+    system.cpu = [TimingSimpleCPU() for i in range(args.num_cpus)]
+
+    # Create a DDR3 memory controller and connect it to the membus
+    system.mem_ctrl = MemCtrl()
+    system.mem_ctrl.dram = DDR3_1600_8x8()
+    system.mem_ctrl.dram.range = system.mem_ranges[0]
+
+    # create the interrupt controller for the CPU and connect to the membus
+    for cpu in system.cpu:
+        cpu.createInterruptController()
+    
+    
+    
+    
 
 
-(CPUClass, test_mem_mode, FutureClass) = Simulation.setCPUClass(args)
-CPUClass.numThreads = numThreads
-
-# Check -- do not allow SMT with multiple CPUs
-if args.smt and args.num_cpus > 1:
-    fatal("You cannot use SMT with multiple CPUs!")
 
 np = args.num_cpus
 mp0_path = multiprocesses[0].executable
@@ -273,4 +241,16 @@ if args.wait_gdb:
     system.workload.wait_for_remote_gdb = True
 
 root = Root(full_system = False, system = system)
+print(args)
 Simulation.run(args, root, system, FutureClass)
+
+
+if __name__=='__main__':
+    parser=argparse.ArgumentParser(description='simple cpu')
+    parser.add_argument('--workload',type=str,default='')
+    parser.add_argument('--cpu-type',type=str,default='AtomicSimpleCPU')
+    parser.add_argument('--num-cpus',type=int,default=1)
+
+    args=parser.parse_args()
+    print(args)
+    main(args)
